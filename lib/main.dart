@@ -1,18 +1,12 @@
 import 'package:flutter/material.dart';
 
-/// The entry point of the application.
-///
-/// This function initializes the app by calling [runApp] with an instance of [MyApp].
 void main() {
   runApp(const MyApp());
 }
 
-/// A [StatelessWidget] that builds the main [MaterialApp].
-///
-/// This widget serves as the root of the application and contains a [Dock]
-/// widget that displays a list of draggable icons.
+/// The root widget of the application.
 class MyApp extends StatelessWidget {
-  /// Creates an instance of [MyApp].
+  /// Creates a [MyApp] widget.
   const MyApp({super.key});
 
   @override
@@ -47,51 +41,74 @@ class MyApp extends StatelessWidget {
   }
 }
 
-/// A [StatefulWidget] that represents a dock of reorderable items.
+/// A customizable dock widget that displays a row of draggable items.
 ///
-/// The [Dock] allows users to drag and drop items to reorder them.
+/// The [Dock] widget creates an interactive dock/toolbar where items can be
+/// reordered through drag and drop interactions. Each item is rendered using
+/// the provided [builder] function.
 ///
-/// The type parameter [T] represents the type of items in the dock.
+/// Type parameter [T] defines the type of items to be displayed in the dock.
 class Dock<T> extends StatefulWidget {
-  /// Creates an instance of [Dock].
+  /// Creates a dock widget.
   ///
-  /// The [items] parameter is a list of initial items to display in the dock.
-  /// The [builder] parameter is a function that builds a widget for each item.
+  /// The [items] parameter specifies the list of items to display.
+  /// The [builder] parameter defines how each item should be rendered.
   const Dock({
     super.key,
-    this.items = const [],
+    required this.items,
     required this.builder,
   });
 
-  /// The initial list of [T] items to display in this [Dock].
+  /// The list of items to display in the dock.
   final List<T> items;
 
-  /// A builder function that creates a widget for the provided [T] item.
+  /// A builder function that defines how each item should be rendered.
+  ///
+  /// This function takes an item of type [T] and returns a [Widget].
   final Widget Function(T) builder;
 
   @override
   State<Dock<T>> createState() => _DockState<T>();
 }
 
-/// The state for the [Dock] widget.
-///
-/// This class manages the state of the dock, including the list of items
-/// and the dragging behavior.
-class _DockState<T> extends State<Dock<T>> {
-  /// The list of [T] items being manipulated in the dock.
-  late final List<T> _items = widget.items.toList();
+class _DockState<T> extends State<Dock<T>> with SingleTickerProviderStateMixin {
+  /// Internal list of items that can be reordered.
+  late final List<T> _items;
 
-  /// The index of the item currently being dragged, or null if no item is being dragged.
+  /// Index of the item currently being dragged, null if no drag is in progress.
   int? _draggingIndex;
+
+  /// Index of the position where a dragged item is hovering, null if not hovering.
+  int? _hoveredIndex;
+
+  /// Whether an item is currently being dragged.
+  bool _isDragging = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _items = widget.items.toList();
+  }
+
+  /// Resets all drag-related state variables.
+  void _resetDragState() {
+    setState(() {
+      _draggingIndex = null;
+      _hoveredIndex = null;
+      _isDragging = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
         color: Colors.black12,
       ),
       padding: const EdgeInsets.all(4),
+      transform: Matrix4.identity()..scale(_isDragging ? 0.95 : 1.0),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: List.generate(_items.length, (index) {
@@ -100,60 +117,100 @@ class _DockState<T> extends State<Dock<T>> {
 
           return LongPressDraggable<int>(
             data: index,
+            delay: const Duration(milliseconds: 50),
             onDragStarted: () {
               setState(() {
                 _draggingIndex = index;
+                _isDragging = true;
               });
             },
-            onDragCompleted: () {
-              setState(() {
-                _draggingIndex = null;
-              });
-            },
-            onDraggableCanceled: (velocity, offset) {
-              setState(() {
-                _draggingIndex = null;
-              });
-            },
-            feedback: Material(
-              color: Colors.transparent,
-              child: Transform.scale(
-                scale: 1.2,
-                child: Opacity(
-                  opacity: 0.8, // Add a slight opacity change
-                  child: widget.builder(item),
-                ),
-              ),
-            ),
+            onDragCompleted: _resetDragState,
+            onDraggableCanceled: (_, __) => _resetDragState(),
+            feedback: _buildDragFeedback(item),
             childWhenDragging: const SizedBox(width: 48),
-            child: DragTarget<int>(
-              onAccept: (oldIndex) {
-                setState(() {
-                  final movedItem = _items.removeAt(oldIndex);
-                  _items.insert(index, movedItem);
-                  _draggingIndex = null;
-                });
-              },
-              onWillAccept: (oldIndex) => oldIndex != index,
-              builder: (context, candidateData, rejectedData) {
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.bounceOut, // Use a bouncy curve
-                  child: Transform.scale(
-                    scale: isBeingDragged ? 1.1 : 1.0,
-                    child: RotationTransition(
-                      turns: isBeingDragged
-                          ? const AlwaysStoppedAnimation(0.05)
-                          : const AlwaysStoppedAnimation(0.0),
-                      child: widget.builder(item),
-                    ),
-                  ),
-                );
-              },
-            ),
+            child: _buildDragTarget(index, item, isBeingDragged),
           );
         }),
       ),
     );
+  }
+
+  /// Builds the visual feedback shown while dragging an item.
+  Widget _buildDragFeedback(T item) {
+    return Material(
+      color: Colors.transparent,
+      child: Transform.scale(
+        scale: 1.2,
+        child: Opacity(
+          opacity: 0.95,
+          child: widget.builder(item),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a drag target for an item at the specified index.
+  ///
+  /// Handles the drag and drop logic and animations for each item.
+  Widget _buildDragTarget(int index, T item, bool isBeingDragged) {
+    return DragTarget<int>(
+      onAccept: (oldIndex) {
+        setState(() {
+          if (oldIndex < _items.length) {
+            final movedItem = _items.removeAt(oldIndex);
+            _items.insert(index, movedItem);
+          }
+          _resetDragState();
+        });
+      },
+      onWillAccept: (oldIndex) {
+        if (oldIndex == null || oldIndex == index) return false;
+        setState(() {
+          _hoveredIndex = index;
+        });
+        return true;
+      },
+      onLeave: (_) {
+        setState(() {
+          _hoveredIndex = null;
+        });
+      },
+      builder: (context, candidateData, rejectedData) {
+        final offset = _calculateOffset(index);
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          transform: Matrix4.translationValues(offset, 0, 0),
+          curve: Curves.easeOutCubic,
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 200),
+            scale: isBeingDragged ? 0.9 : 1.0,
+            child: AnimatedRotation(
+              turns: isBeingDragged ? 0.05 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              child: widget.builder(item),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Calculates the horizontal offset for an item during drag operations.
+  double _calculateOffset(int index) {
+    if (_isDragging && _hoveredIndex != null && _draggingIndex != null) {
+      if (_draggingIndex! < index && index <= _hoveredIndex!) {
+        return -48.0;
+      } else if (_draggingIndex! > index && index >= _hoveredIndex!) {
+        return 48.0;
+      }
+    }
+    return 0.0;
+  }
+
+  @override
+  void dispose() {
+    _items.clear();
+    super.dispose();
   }
 }
